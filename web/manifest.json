@@ -1,6 +1,6 @@
 {
-    "name": "falcon_intel_mobile",
-    "short_name": "falcon_intel_mobile",
+    "name": "Falcon Intel",
+    "short_name": "Falcon Intel",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

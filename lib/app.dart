@@ -29,6 +29,14 @@ final navAlertCountProvider = FutureProvider<int>((ref) async {
 /// Regenerated with each router (see below).
 var _branchKeys = List.generate(5, (_) => GlobalKey<NavigatorState>());
 
+/// Takes the user to the top of the News feed (first tab), closing any
+/// story they had open there. Used after preferences change, so they see the
+/// re-filtered feed straight away.
+void goToNewsHome(GoRouter router) {
+  _branchKeys[0].currentState?.popUntil((route) => route.isFirst);
+  router.go('/');
+}
+
 /// Last visited location, so a rebuilt router reopens the same tab.
 String _lastLocation = '/';
 

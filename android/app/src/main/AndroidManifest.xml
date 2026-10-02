@@ -1,10 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Needed in release builds too (the debug manifest only covers debug). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Biometric authentication (fingerprint/face) -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
 
     <application
-        android:label="falcon_intel_mobile"
+        android:label="Falcon Intel"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">

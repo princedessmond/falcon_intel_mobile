@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../app.dart';
 import '../../core/preferences/user_preferences.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
@@ -32,7 +35,7 @@ class _PreferencesScreenState extends ConsumerState<PreferencesScreen> {
     await ref.read(preferencesProvider.notifier).save(_prefs);
     if (!mounted) return;
     setState(() => _saving = false);
-    showAppSnack(context, 'Preferences saved — your feeds are now filtered', success: true);
+    _backToNews('Preferences saved — your feeds are now filtered', success: true);
   }
 
   Future<void> _clear() async {
@@ -40,7 +43,17 @@ class _PreferencesScreenState extends ConsumerState<PreferencesScreen> {
       _prefs = UserPreferences();
     });
     await ref.read(preferencesProvider.notifier).clear();
-    if (mounted) showAppSnack(context, 'Preferences cleared — showing everything');
+    if (mounted) _backToNews('Preferences cleared — showing everything');
+  }
+
+  /// Close this screen and land on the News feed so the user immediately sees
+  /// the effect of their new preferences.
+  void _backToNews(String message, {bool success = false}) {
+    // The snackbar lives in the app-wide messenger, so it stays visible on News.
+    showAppSnack(context, message, success: success);
+    final router = GoRouter.of(context);
+    Navigator.of(context).pop();
+    goToNewsHome(router);
   }
 
   void _toggleCategory(String category) {
