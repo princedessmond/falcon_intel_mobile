@@ -1,8 +1,5 @@
-import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
-import '../api/endpoints.dart';
 
 /// User preferences — synced with the Falcon Intel backend API.
 /// Both web and mobile use the same /api/preferences/ endpoint.

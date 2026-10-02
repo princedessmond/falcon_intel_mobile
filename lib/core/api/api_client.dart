@@ -1,8 +1,9 @@
 import 'package:dio/dio.dart';
-import 'package:dio/browser.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'endpoints.dart';
+import 'browser_adapter_stub.dart'
+    if (dart.library.js_interop) 'browser_adapter_web.dart';
 
 /// Singleton Dio HTTP client with JWT token management.
 ///
@@ -36,8 +37,7 @@ class ApiClient {
 
     // On web, enable native cookie management (browser handles Set-Cookie)
     if (kIsWeb) {
-      dio.httpClientAdapter = BrowserHttpClientAdapter()
-        ..withCredentials = true;
+      configureBrowserAdapter(dio);
     }
 
     // Load stored tokens (for native platforms)
@@ -168,6 +168,28 @@ class ApiClient {
       error = data['detail']?.toString() ?? 'Login failed';
     }
     throw Exception(error);
+  }
+
+  /// Checks an email/password with the server WITHOUT touching this session's
+  /// tokens (uses a throwaway client). Used before storing a password for
+  /// fingerprint sign-in. Returns false for a wrong password; throws if the
+  /// server can't be reached.
+  Future<bool> verifyPassword(String email, String password) async {
+    final probe = Dio(BaseOptions(
+      baseUrl: Endpoints.apiBase,
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 30),
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      validateStatus: (status) => status != null && status < 500,
+    ));
+    final resp = await probe.post(Endpoints.login, data: {
+      'email': email,
+      'password': password,
+      'remember_me': false,
+    });
+    // 200 covers both a full sign-in and "2FA required" — either way the
+    // password itself is correct.
+    return resp.statusCode == 200;
   }
 
   /// Verify 2FA

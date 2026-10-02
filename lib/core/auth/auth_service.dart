@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
-import '../api/endpoints.dart';
+import '../widgets/common.dart';
 
 class AuthState {
   final bool isLoggedIn;
@@ -89,7 +89,7 @@ class AuthService extends StateNotifier<AuthState> {
         );
       }
     } catch (e) {
-      state = state.copyWith(error: e.toString().replaceAll('Exception: ', ''));
+      state = state.copyWith(error: friendlyError(e));
     }
   }
 
@@ -113,7 +113,7 @@ class AuthService extends StateNotifier<AuthState> {
         role: user?['role'],
       );
     } catch (e) {
-      state = state.copyWith(error: e.toString().replaceAll('Exception: ', ''));
+      state = state.copyWith(error: friendlyError(e));
     }
   }
 

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:timeago/timeago.dart' as timeago;
 import '../../core/api/api_client.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/ai_analysis.dart';
+import '../../core/widgets/common.dart';
 import '../../models/article.dart';
 
 class SocialDetailScreen extends StatefulWidget {
@@ -59,8 +60,9 @@ class _SocialDetailScreenState extends State<SocialDetailScreen> {
         String errorMsg = 'Analysis failed (HTTP ${resp.statusCode})';
         if (resp.data is Map) {
           final detail = resp.data['detail'];
-          if (detail is String) errorMsg = detail;
-          else if (detail is Map) errorMsg = detail['message']?.toString() ?? 'Analysis failed';
+          if (detail is String) {
+            errorMsg = detail;
+          } else if (detail is Map) errorMsg = detail['message']?.toString() ?? 'Analysis failed';
         }
         setState(() {
           _analysisError = errorMsg;
@@ -69,7 +71,7 @@ class _SocialDetailScreenState extends State<SocialDetailScreen> {
       }
     } catch (e) {
       setState(() {
-        _analysisError = e.toString().replaceAll('Exception: ', '');
+        _analysisError = friendlyError(e);
         _analyzing = false;
       });
     }
@@ -78,145 +80,110 @@ class _SocialDetailScreenState extends State<SocialDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final f = widget.finding;
-    final platform = f['platform'] ?? f['source'] ?? 'unknown';
-    final severity = f['severity'] ?? f['threat_level'] ?? 'medium';
-    final sentiment = f['sentiment'] ?? 'neutral';
-    final dt = DateTime.tryParse(f['detected_at'] ?? f['discovered_at'] ?? f['posted_at'] ?? '');
+    final platform = (f['platform'] ?? f['source'] ?? 'unknown').toString();
+    final severity = (f['severity'] ?? f['threat_level'] ?? 'medium').toString();
+    final sentiment = (f['sentiment'] ?? 'neutral').toString();
+    final when = timeAgo((f['detected_at'] ?? f['discovered_at'] ?? f['posted_at'])?.toString());
+    final description = f['description']?.toString() ?? '';
+    final author = cleanHandle(f['author']);
+    // When the title is just the start of the post, show the full post as the
+    // body instead of repeating it.
+    final titleText = (f['title'] ?? 'Untitled').toString();
+    final (_, extra) = dedupePostText(titleText, description);
+    final isFullPost = description.isNotEmpty && extra == null;
+    final url = originalUrl(f);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Finding Detail'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
+      appBar: AppBar(title: const Text('Social Post')),
+      bottomNavigationBar: url != null
+          ? BottomActionBar(children: [
+              OutlinedButton.icon(
+                onPressed: () => openExternalUrl(context, url),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                  foregroundColor: AppTheme.primaryText,
+                  side: BorderSide(color: AppTheme.primaryText.withValues(alpha: 0.6)),
+                ),
+                icon: const Icon(Icons.open_in_new_rounded),
+                label: Text(openOriginalLabel(platform)),
+              ),
+            ])
+          : null,
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Badges row
             Wrap(
-              spacing: 8,
-              runSpacing: 4,
+              spacing: 6,
+              runSpacing: 6,
               children: [
-                _Badge(text: platform.toUpperCase(), color: AppTheme.platformColor(platform)),
-                _Badge(text: severity.toUpperCase(), color: AppTheme.severityColor(severity)),
-                _Badge(
-                  text: sentiment.toUpperCase(),
+                SeverityPill(severity),
+                Pill(
+                  text: platform.toLowerCase() == 'twitter' ? 'X / Twitter' : formatLabel(platform),
+                  color: AppTheme.platformColor(platform),
+                ),
+                Pill(
+                  text: '${formatLabel(sentiment)} tone',
                   color: _sentimentColor(sentiment),
                   icon: _sentimentIcon(sentiment),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
 
             // Title
-            Text(f['title'] ?? 'Untitled',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-            const SizedBox(height: 8),
+            Text((f['title'] ?? 'Untitled').toString(),
+                style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800, height: 1.3, color: AppTheme.textPrimary)),
+            const SizedBox(height: 12),
 
             // Author + time
-            if (f['author'] != null || dt != null)
-              Row(
-                children: [
-                  if (f['author'] != null)
-                    Text('@${f['author']}',
-                        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                  if (f['author'] != null && dt != null)
-                    Text(' · ', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                  if (dt != null)
-                    Text(timeago.format(dt),
-                        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                ],
-              ),
-            const SizedBox(height: 16),
+            Wrap(
+              spacing: 16,
+              runSpacing: 6,
+              children: [
+                if (author != null)
+                  MetaText(icon: Icons.person_outline_rounded, text: '@$author', color: AppTheme.primaryText),
+                if (when != null) MetaText(icon: Icons.schedule_rounded, text: when),
+              ],
+            ),
+            const SizedBox(height: 20),
 
             // Description
-            if (f['description'] != null && f['description'].toString().isNotEmpty) ...[
-              Text('Synopsis',
-                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              Text(f['description'],
-                  style: const TextStyle(fontSize: 15, height: 1.5, color: AppTheme.textPrimary)),
+            if (description.isNotEmpty) ...[
+              Panel(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SectionLabel(isFullPost ? 'Full post' : 'Summary'),
+                    const SizedBox(height: 10),
+                    Text(description,
+                        textAlign: TextAlign.justify,
+                        style: TextStyle(fontSize: 16, height: 1.6, color: AppTheme.textPrimary)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
             ],
-
-            const SizedBox(height: 16),
 
             // Engagement stats
             _EngagementStats(finding: f),
 
             // Deep analysis metrics
             if (f['influence_score'] != null || f['bot_risk_score'] != null || f['is_viral'] == true) ...[
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               _DeepAnalysisCard(finding: f),
             ],
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
 
-            // AI Analysis button
-            if (_analysis == null && !_analyzing)
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _runAIAnalysis,
-                  icon: const Icon(Icons.psychology),
-                  label: const Text('AI Analyze'),
-                ),
-              ),
-
-            if (_analyzing)
-              Center(
-                child: Column(
-                  children: [
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: 16),
-                    Text('Analyzing with AI...', style: TextStyle(color: AppTheme.textSecondary)),
-                    const SizedBox(height: 4),
-                    Text('This may take a few seconds',
-                        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                  ],
-                ),
-              ),
-
-            if (_analysisError != null) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppTheme.accentRed.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.accentRed.withOpacity(0.3)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.error_outline, color: AppTheme.accentRed, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(_analysisError!,
-                        style: const TextStyle(color: AppTheme.accentRed, fontSize: 13))),
-                  ],
-                ),
-              ),
-            ],
-
-            if (_analysis != null) ...[
-              const SizedBox(height: 24),
-              _AnalysisCard(analysis: _analysis!),
-            ],
-
-            const SizedBox(height: 32),
-
-            // Source URL
-            if (f['url'] != null && f['url'].toString().isNotEmpty) ...[
-              const Divider(),
-              const SizedBox(height: 16),
-              Text('Source', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              Text(f['url'],
-                  style: TextStyle(color: AppTheme.primaryColor, fontSize: 12),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
-            ],
+            AiAnalysisSection(
+              analyzing: _analyzing,
+              error: _analysisError,
+              analysis: _analysis,
+              onAnalyze: _runAIAnalysis,
+            ),
           ],
         ),
       ),
@@ -229,8 +196,6 @@ class _SocialDetailScreenState extends State<SocialDetailScreen> {
         return AppTheme.accentGreen;
       case 'negative':
         return AppTheme.accentRed;
-      case 'neutral':
-        return AppTheme.textSecondary;
       default:
         return AppTheme.textSecondary;
     }
@@ -239,38 +204,12 @@ class _SocialDetailScreenState extends State<SocialDetailScreen> {
   IconData _sentimentIcon(String sentiment) {
     switch (sentiment.toLowerCase()) {
       case 'positive':
-        return Icons.sentiment_satisfied;
+        return Icons.sentiment_satisfied_rounded;
       case 'negative':
-        return Icons.sentiment_dissatisfied;
+        return Icons.sentiment_dissatisfied_rounded;
       default:
-        return Icons.sentiment_neutral;
+        return Icons.sentiment_neutral_rounded;
     }
-  }
-}
-
-class _Badge extends StatelessWidget {
-  final String text;
-  final Color color;
-  final IconData? icon;
-  const _Badge({required this.text, required this.color, this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (icon != null) ...[Icon(icon, size: 12, color: color), const SizedBox(width: 4)],
-          Text(text, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
   }
 }
 
@@ -281,38 +220,52 @@ class _EngagementStats extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stats = <_StatItem>[
-      if (finding['score'] != null)
-        _StatItem(Icons.arrow_upward, 'Score', finding['score'].toString()),
+      if (finding['score'] != null) _StatItem(Icons.arrow_upward_rounded, 'Score', compactNumber(finding['score'])),
       if (finding['num_comments'] != null)
-        _StatItem(Icons.comment, 'Comments', finding['num_comments'].toString()),
-      if (finding['reach'] != null)
-        _StatItem(Icons.people, 'Reach', finding['reach'].toString()),
-      if (finding['kenya_relevance'] != null)
-        _StatItem(Icons.location_on, 'Kenya %', '${((finding['kenya_relevance'] ?? 0) * 100).toInt()}%'),
-      if (finding['ai_confidence'] != null)
-        _StatItem(Icons.analytics, 'AI Conf', '${finding['ai_confidence']}%'),
+        _StatItem(Icons.chat_bubble_outline_rounded, 'Comments', compactNumber(finding['num_comments'])),
+      if (finding['reach'] != null) _StatItem(Icons.people_outline_rounded, 'Reach', compactNumber(finding['reach'])),
+      if (percentLabel(finding['kenya_relevance']) != null)
+        _StatItem(Icons.place_outlined, 'Kenya relevance', percentLabel(finding['kenya_relevance'])!),
+      if (percentLabel(finding['ai_confidence']) != null)
+        _StatItem(Icons.analytics_outlined, 'AI confidence', percentLabel(finding['ai_confidence'])!),
     ];
 
     if (stats.isEmpty) return const SizedBox.shrink();
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.darkSurface,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Wrap(
-        spacing: 16,
-        runSpacing: 8,
-        children: stats.map((s) => Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(s.icon, size: 14, color: AppTheme.textSecondary),
-            const SizedBox(width: 4),
-            Text('${s.label}: ', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-            Text(s.value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-          ],
-        )).toList(),
+    return Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionLabel('Engagement'),
+          const SizedBox(height: 12),
+          LayoutBuilder(builder: (context, c) {
+            final w = (c.maxWidth - 12) / 2;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 14,
+              children: stats
+                  .map((s) => SizedBox(
+                        width: w,
+                        child: Row(
+                          children: [
+                            Icon(s.icon, size: 18, color: AppTheme.textSecondary),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(s.value, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                                  Text(s.label, style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ))
+                  .toList(),
+            );
+          }),
+        ],
       ),
     );
   }
@@ -331,48 +284,31 @@ class _DeepAnalysisCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.accentPurple.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.accentPurple.withOpacity(0.3)),
-      ),
+    return Panel(
+      color: AppTheme.accentPurple.withValues(alpha: 0.08),
+      borderColor: AppTheme.accentPurple.withValues(alpha: 0.35),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.insights, color: AppTheme.accentPurple, size: 16),
-              const SizedBox(width: 6),
-              Text('Deep Analysis', style: TextStyle(color: AppTheme.accentPurple, fontSize: 12, fontWeight: FontWeight.w600)),
+              Icon(Icons.insights_rounded, color: AppTheme.accentPurple, size: 18),
+              const SizedBox(width: 8),
+              Text('Account & spread analysis',
+                  style: TextStyle(color: AppTheme.accentPurple, fontSize: 14, fontWeight: FontWeight.w700)),
             ],
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 12,
-            runSpacing: 6,
-            children: [
-              if (finding['influence_score'] != null)
-                _Metric('Influence', finding['influence_score'].toString()),
-              if (finding['credibility_score'] != null)
-                _Metric('Credibility', finding['credibility_score'].toString()),
-              if (finding['bot_risk_score'] != null)
-                _Metric('Bot Risk', finding['bot_risk_score'].toString()),
-              if (finding['is_viral'] == true)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppTheme.accentRed.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text('VIRAL', style: TextStyle(color: AppTheme.accentRed, fontSize: 10, fontWeight: FontWeight.bold)),
-                ),
-              if (finding['narrative_cluster_label'] != null)
-                _Metric('Cluster', finding['narrative_cluster_label'].toString()),
-            ],
-          ),
+          const SizedBox(height: 10),
+          if (finding['influence_score'] != null) _Metric('Influence', scoreLabel(finding['influence_score'])),
+          if (finding['credibility_score'] != null) _Metric('Credibility', scoreLabel(finding['credibility_score'])),
+          if (finding['bot_risk_score'] != null)
+            _Metric('Bot risk (chance it\'s automated)', scoreLabel(finding['bot_risk_score'])),
+          if (finding['narrative_cluster_label'] != null)
+            _Metric('Narrative group', finding['narrative_cluster_label'].toString()),
+          if (finding['is_viral'] == true) ...[
+            const SizedBox(height: 6),
+            Pill(text: 'Spreading fast (viral)', color: AppTheme.accentRed, icon: Icons.local_fire_department_rounded),
+          ],
         ],
       ),
     );
@@ -386,101 +322,18 @@ class _Metric extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text('$label: $value', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12));
-  }
-}
-
-// Reuse the same _AnalysisCard from article_detail
-class _AnalysisCard extends StatelessWidget {
-  final AnalysisResult analysis;
-  const _AnalysisCard({required this.analysis});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: AppTheme.darkSurface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.primaryColor.withOpacity(0.3)),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.psychology, color: AppTheme.primaryColor, size: 20),
-              const SizedBox(width: 8),
-              Text('AI Analysis',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.primaryColor)),
-              const Spacer(),
-              if (analysis.aiModel != null)
-                Flexible(
-                  child: Text(analysis.aiModel!,
-                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 10),
-                      overflow: TextOverflow.ellipsis),
-                ),
-            ],
+          Expanded(child: Text(label, style: TextStyle(color: AppTheme.textSecondary, fontSize: 14))),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(value,
+                textAlign: TextAlign.right,
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
           ),
-          const SizedBox(height: 16),
-          if (analysis.threatLevel != null)
-            Wrap(
-              spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text('Threat Level:', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppTheme.severityColor(analysis.threatLevel!).withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(analysis.threatLevel!.toUpperCase(),
-                      style: TextStyle(color: AppTheme.severityColor(analysis.threatLevel!),
-                          fontSize: 11, fontWeight: FontWeight.bold)),
-                ),
-                if (analysis.threatScore != null)
-                  Text('Score: ${analysis.threatScore!.toStringAsFixed(0)}',
-                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                if (analysis.confidenceScore != null)
-                  Text('Confidence: ${(analysis.confidenceScore! * 100).toInt()}%',
-                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-              ],
-            ),
-          if (analysis.aiSummary != null && analysis.aiSummary!.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('AI Summary', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            Text(analysis.aiSummary!, style: const TextStyle(fontSize: 14, height: 1.5)),
-          ],
-          if (analysis.predictedImpact != null && analysis.predictedImpact!.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('Predicted Impact', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            Text(analysis.predictedImpact!, style: const TextStyle(fontSize: 14, height: 1.5)),
-          ],
-          if (analysis.actionableIntelligence != null && analysis.actionableIntelligence!.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('Actionable Intelligence', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            Text(analysis.actionableIntelligence!, style: const TextStyle(fontSize: 14, height: 1.5)),
-          ],
-          if (analysis.recommendedCountermeasures != null && analysis.recommendedCountermeasures!.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('Recommended Countermeasures', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            ...analysis.recommendedCountermeasures!.map((c) => Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(Icons.check_circle_outline, size: 16, color: AppTheme.accentGreen),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(c, style: const TextStyle(fontSize: 13, height: 1.4))),
-                ],
-              ),
-            )),
-          ],
         ],
       ),
     );

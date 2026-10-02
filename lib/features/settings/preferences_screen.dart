@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/preferences/user_preferences.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/common.dart';
 
 class PreferencesScreen extends ConsumerStatefulWidget {
   const PreferencesScreen({super.key});
@@ -14,6 +17,7 @@ class _PreferencesScreenState extends ConsumerState<PreferencesScreen> {
   late UserPreferences _prefs;
   bool _loading = true;
   bool _saving = false;
+  String _countyQuery = '';
 
   @override
   void initState() {
@@ -26,15 +30,9 @@ class _PreferencesScreenState extends ConsumerState<PreferencesScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     await ref.read(preferencesProvider.notifier).save(_prefs);
+    if (!mounted) return;
     setState(() => _saving = false);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Preferences saved — feeds will be filtered'),
-          backgroundColor: AppTheme.accentGreen,
-        ),
-      );
-    }
+    showAppSnack(context, 'Preferences saved — your feeds are now filtered', success: true);
   }
 
   Future<void> _clear() async {
@@ -42,11 +40,7 @@ class _PreferencesScreenState extends ConsumerState<PreferencesScreen> {
       _prefs = UserPreferences();
     });
     await ref.read(preferencesProvider.notifier).clear();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Preferences cleared')),
-      );
-    }
+    if (mounted) showAppSnack(context, 'Preferences cleared — showing everything');
   }
 
   void _toggleCategory(String category) {
@@ -109,188 +103,225 @@ class _PreferencesScreenState extends ConsumerState<PreferencesScreen> {
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+  bool get _hasUnsavedChanges =>
+      jsonEncode(_prefs.toJson()) != jsonEncode(ref.read(preferencesProvider).toJson());
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('My Preferences'),
+  int get _selectedCount =>
+      _prefs.preferredCategories.length +
+      _prefs.preferredSeverity.length +
+      _prefs.preferredRegions.length +
+      _prefs.preferredCounties.length +
+      _prefs.preferredPlatforms.length;
+
+  Future<void> _confirmClear() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear all preferences?'),
+        content: const Text('Your News and Social feeds will show everything again.'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: AppTheme.accentRed),
-            onPressed: _clear,
-            tooltip: 'Clear all',
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Info banner
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primaryColor.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppTheme.primaryColor.withOpacity(0.3)),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline, color: AppTheme.primaryColor, size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Select your preferred categories, severity levels, regions, and counties. Your News and Social feeds will be filtered automatically.',
-                            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Categories
-                  _SectionTitle(title: 'OSINT Categories', count: _prefs.preferredCategories.length),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: PreferenceOptions.categories.map((cat) {
-                      final selected = _prefs.preferredCategories.contains(cat);
-                      return FilterChip(
-                        label: Text(_formatCategory(cat), style: TextStyle(fontSize: 12)),
-                        selected: selected,
-                        onSelected: (_) => _toggleCategory(cat),
-                        selectedColor: AppTheme.primaryColor.withOpacity(0.3),
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Severity
-                  _SectionTitle(title: 'Severity Levels', count: _prefs.preferredSeverity.length),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: PreferenceOptions.severityLevels.map((sev) {
-                      final selected = _prefs.preferredSeverity.contains(sev);
-                      return FilterChip(
-                        label: Text(sev.toUpperCase(), style: TextStyle(fontSize: 12)),
-                        selected: selected,
-                        onSelected: (_) => _toggleSeverity(sev),
-                        selectedColor: AppTheme.severityColor(sev).withOpacity(0.3),
-                        avatar: Icon(Icons.warning, size: 14,
-                            color: AppTheme.severityColor(sev)),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Region
-                  _SectionTitle(title: 'Regions', count: _prefs.preferredRegions.length),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: PreferenceOptions.regions.map((reg) {
-                      final selected = _prefs.preferredRegions.contains(reg);
-                      return FilterChip(
-                        label: Text(reg[0].toUpperCase() + reg.substring(1),
-                            style: const TextStyle(fontSize: 12)),
-                        selected: selected,
-                        onSelected: (_) => _toggleRegion(reg),
-                        selectedColor: AppTheme.primaryColor.withOpacity(0.3),
-                        avatar: const Icon(Icons.public, size: 14),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Social platforms
-                  _SectionTitle(title: 'Social Media Platforms', count: _prefs.preferredPlatforms.length),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: PreferenceOptions.platforms.map((plat) {
-                      final selected = _prefs.preferredPlatforms.contains(plat);
-                      return FilterChip(
-                        label: Text(plat[0].toUpperCase() + plat.substring(1),
-                            style: const TextStyle(fontSize: 12)),
-                        selected: selected,
-                        onSelected: (_) => _togglePlatform(plat),
-                        selectedColor: AppTheme.platformColor(plat).withOpacity(0.3),
-                        avatar: Icon(_platformIcon(plat), size: 14,
-                            color: AppTheme.platformColor(plat)),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Counties
-                  _SectionTitle(title: 'Counties', count: _prefs.preferredCounties.length),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: PreferenceOptions.counties.map((county) {
-                      final selected = _prefs.preferredCounties.contains(county);
-                      return FilterChip(
-                        label: Text(county, style: const TextStyle(fontSize: 11)),
-                        selected: selected,
-                        onSelected: (_) => _toggleCounty(county),
-                        selectedColor: AppTheme.accentGreen.withOpacity(0.3),
-                        avatar: const Icon(Icons.location_on, size: 14),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 32),
-                ],
-              ),
-            ),
-          ),
-          // Save button (sticky bottom)
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppTheme.darkSurface,
-              border: Border(top: BorderSide(color: AppTheme.darkCard)),
-            ),
-            child: SafeArea(
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _saving ? null : _save,
-                  child: _saving
-                      ? const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            SizedBox(height: 20, width: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2)),
-                            SizedBox(width: 12),
-                            Text('Saving...'),
-                          ],
-                        )
-                      : const Text('Save Preferences'),
-                ),
-              ),
-            ),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.dangerFill),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear all'),
           ),
         ],
       ),
     );
+    if (ok == true) await _clear();
   }
 
-  String _formatCategory(String cat) {
-    return cat.split('_').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ');
+  Future<void> _confirmDiscard() async {
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Discard changes?'),
+        content: const Text('You have changes that haven\'t been saved.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Keep editing')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.accentRed),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if (leave == true && mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+
+    final query = _countyQuery.trim().toLowerCase();
+    final counties = query.isEmpty
+        ? PreferenceOptions.counties
+        : PreferenceOptions.counties.where((c) => c.toLowerCase().contains(query)).toList();
+
+    return PopScope(
+      canPop: !_hasUnsavedChanges,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _confirmDiscard();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('My Preferences'),
+          actions: [
+            TextButton(
+              onPressed: _selectedCount == 0 && !_prefs.hasFilters ? null : _confirmClear,
+              style: TextButton.styleFrom(foregroundColor: AppTheme.accentRed),
+              child: const Text('Clear all'),
+            ),
+            const SizedBox(width: 4),
+          ],
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                children: [
+                  const NoticeBanner(
+                    message: 'Choose what matters to you. News and Social will only show matching items. '
+                        'Leave a section empty to include everything.',
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Severity
+                  _PrefSection(
+                    title: 'Severity',
+                    subtitle: 'How serious the threat is',
+                    count: _prefs.preferredSeverity.length,
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: PreferenceOptions.severityLevels.map((sev) {
+                        final color = AppTheme.severityColor(sev);
+                        return FilterChip(
+                          label: Text(formatLabel(sev)),
+                          selected: _prefs.preferredSeverity.contains(sev),
+                          onSelected: (_) => _toggleSeverity(sev),
+                          selectedColor: color.withValues(alpha: 0.28),
+                          avatar: Icon(AppTheme.severityIcon(sev), size: 16, color: color),
+                          showCheckmark: false,
+                        );
+                      }).toList(),
+                    ),
+                  ),
+
+                  // Categories
+                  _PrefSection(
+                    title: 'Topics',
+                    subtitle: 'Kinds of threats to follow',
+                    count: _prefs.preferredCategories.length,
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: PreferenceOptions.categories.map((cat) {
+                        return FilterChip(
+                          label: Text(formatLabel(cat)),
+                          selected: _prefs.preferredCategories.contains(cat),
+                          onSelected: (_) => _toggleCategory(cat),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+
+                  // Region
+                  _PrefSection(
+                    title: 'Regions',
+                    subtitle: 'Where the story is from',
+                    count: _prefs.preferredRegions.length,
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: PreferenceOptions.regions.map((reg) {
+                        return FilterChip(
+                          label: Text(formatLabel(reg)),
+                          selected: _prefs.preferredRegions.contains(reg),
+                          onSelected: (_) => _toggleRegion(reg),
+                          avatar: const Icon(Icons.public, size: 16),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+
+                  // Social platforms
+                  _PrefSection(
+                    title: 'Social media platforms',
+                    count: _prefs.preferredPlatforms.length,
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: PreferenceOptions.platforms.map((plat) {
+                        return FilterChip(
+                          label: Text(formatLabel(plat)),
+                          selected: _prefs.preferredPlatforms.contains(plat),
+                          onSelected: (_) => _togglePlatform(plat),
+                          selectedColor: AppTheme.platformColor(plat).withValues(alpha: 0.28),
+                          avatar: Icon(_platformIcon(plat), size: 16, color: AppTheme.platformColor(plat)),
+                          showCheckmark: false,
+                        );
+                      }).toList(),
+                    ),
+                  ),
+
+                  // Counties
+                  _PrefSection(
+                    title: 'Counties',
+                    subtitle: 'Stories that mention no county are always shown',
+                    count: _prefs.preferredCounties.length,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        TextField(
+                          onChanged: (v) => setState(() => _countyQuery = v),
+                          decoration: const InputDecoration(
+                            hintText: 'Search counties',
+                            prefixIcon: Icon(Icons.search_rounded),
+                            isDense: true,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        if (counties.isEmpty)
+                          Text('No county matches that search',
+                              style: TextStyle(color: AppTheme.textSecondary))
+                        else
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: counties.map((county) {
+                              return FilterChip(
+                                label: Text(county),
+                                selected: _prefs.preferredCounties.contains(county),
+                                onSelected: (_) => _toggleCounty(county),
+                                selectedColor: AppTheme.accentGreen.withValues(alpha: 0.25),
+                              );
+                            }).toList(),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Save button (sticky bottom)
+            BottomActionBar(children: [
+              ElevatedButton(
+                onPressed: _saving ? null : _save,
+                child: _saving
+                    ? const DotsLoader()
+                    : Text(_selectedCount == 0
+                        ? 'Save — show everything'
+                        : 'Save $_selectedCount ${_selectedCount == 1 ? 'filter' : 'filters'}'),
+              ),
+            ]),
+          ],
+        ),
+      ),
+    );
   }
 
   IconData _platformIcon(String platform) {
@@ -307,33 +338,43 @@ class _PreferencesScreenState extends ConsumerState<PreferencesScreen> {
   }
 }
 
-class _SectionTitle extends StatelessWidget {
+class _PrefSection extends StatelessWidget {
   final String title;
+  final String? subtitle;
   final int count;
-  const _SectionTitle({required this.title, required this.count});
+  final Widget child;
+  const _PrefSection({required this.title, required this.count, required this.child, this.subtitle});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(title,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: AppTheme.textPrimary,
-            )),
-        const SizedBox(width: 8),
-        if (count > 0)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: AppTheme.primaryColor.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(4),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Panel(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(title,
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+                ),
+                Pill(
+                  text: count == 0 ? 'All' : '$count selected',
+                  color: count == 0 ? AppTheme.textMuted : AppTheme.primaryText,
+                  dense: true,
+                ),
+              ],
             ),
-            child: Text('$count',
-                style: const TextStyle(color: AppTheme.primaryColor, fontSize: 11)),
-          ),
-      ],
+            if (subtitle != null) ...[
+              const SizedBox(height: 2),
+              Text(subtitle!, style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+            ],
+            const SizedBox(height: 12),
+            child,
+          ],
+        ),
+      ),
     );
   }
 }

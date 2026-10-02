@@ -3,9 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/theme/app_theme.dart';
+import 'core/theme/theme_mode.dart';
 import 'core/auth/auth_service.dart';
-import 'core/api/api_client.dart';
-import 'core/api/endpoints.dart';
+import 'core/auth/biometric_offer.dart';
 import 'features/auth/login_screen.dart';
 import 'features/news/news_screen.dart';
 import 'features/social/social_screen.dart';
@@ -13,24 +13,44 @@ import 'features/alerts/alerts_screen.dart';
 import 'features/watchlist/watchlist_screen.dart';
 import 'features/settings/settings_screen.dart';
 
-/// Fetches alert count for the badge
+/// Badge on the Alerts tab: unchecked alerts the Alerts screen actually lists
+/// (news + social). The server's /alerts/count also includes dark-web alerts
+/// that the app doesn't show, which made the badge promise alerts nobody
+/// could open. Fetched separately so refreshing it doesn't reload the screen.
 final navAlertCountProvider = FutureProvider<int>((ref) async {
   try {
-    final resp = await ApiClient.instance.get(Endpoints.alertsCount);
-    if (resp.statusCode == 200 && resp.data is Map) {
-      return (resp.data['count'] ?? 0) as int;
-    }
+    final alerts = await fetchAppAlerts('all');
+    return alerts.where(isOpenAlert).length;
   } catch (_) {}
   return 0;
 });
 
-final goRouterProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authStateProvider);
+/// One navigator per bottom tab, so each tab keeps its own history.
+/// Regenerated with each router (see below).
+var _branchKeys = List.generate(5, (_) => GlobalKey<NavigatorState>());
 
-  return GoRouter(
-    initialLocation: '/',
+/// Last visited location, so a rebuilt router reopens the same tab.
+String _lastLocation = '/';
+
+final goRouterProvider = Provider<GoRouter>((ref) {
+  // The router is NOT rebuilt on every auth state change — that would recreate
+  // the login screen mid-sign-in and wipe its loading state. Instead the
+  // redirect re-runs only when the user actually signs in or out.
+  final authChanges = ValueNotifier<bool>(ref.read(authStateProvider).isLoggedIn);
+  ref.listen(authStateProvider, (_, next) => authChanges.value = next.isLoggedIn);
+  ref.onDispose(authChanges.dispose);
+
+  // A theme change builds a fresh router (and so a fresh widget tree) so every
+  // screen repaints with the new palette; it reopens the current tab.
+  ref.watch(effectiveBrightnessProvider);
+  _branchKeys = List.generate(5, (_) => GlobalKey<NavigatorState>());
+
+  late final GoRouter router;
+  router = GoRouter(
+    initialLocation: _lastLocation,
+    refreshListenable: authChanges,
     redirect: (context, state) {
-      final isLoggedIn = authState.isLoggedIn;
+      final isLoggedIn = ref.read(authStateProvider).isLoggedIn;
       final isLoginRoute = state.matchedLocation == '/login';
       if (!isLoggedIn && !isLoginRoute) return '/login';
       if (isLoggedIn && isLoginRoute) return '/';
@@ -41,93 +61,156 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/login',
         builder: (context, state) => const LoginScreen(),
       ),
-      ShellRoute(
-        builder: (context, state, child) => MainShell(child: child),
-        routes: [
-          GoRoute(path: '/', builder: (context, state) => const NewsScreen()),
-          GoRoute(path: '/social', builder: (context, state) => const SocialScreen()),
-          GoRoute(path: '/alerts', builder: (context, state) => const AlertsScreen()),
-          GoRoute(path: '/watchlist', builder: (context, state) => const WatchlistScreen()),
-          GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
+      // Indexed stack keeps each tab alive: switching tabs preserves scroll
+      // position, filters and any open detail page.
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) => MainShell(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(navigatorKey: _branchKeys[0], routes: [
+            GoRoute(path: '/', builder: (context, state) => const NewsScreen()),
+          ]),
+          StatefulShellBranch(navigatorKey: _branchKeys[1], routes: [
+            GoRoute(path: '/social', builder: (context, state) => const SocialScreen()),
+          ]),
+          StatefulShellBranch(navigatorKey: _branchKeys[2], routes: [
+            GoRoute(path: '/alerts', builder: (context, state) => const AlertsScreen()),
+          ]),
+          StatefulShellBranch(navigatorKey: _branchKeys[3], routes: [
+            GoRoute(path: '/watchlist', builder: (context, state) => const WatchlistScreen()),
+          ]),
+          StatefulShellBranch(navigatorKey: _branchKeys[4], routes: [
+            GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
+          ]),
         ],
       ),
     ],
   );
+  router.routerDelegate.addListener(() {
+    final loc = router.routerDelegate.currentConfiguration.uri.toString();
+    if (loc.isNotEmpty) _lastLocation = loc;
+  });
+  return router;
 });
 
-class FalconIntelApp extends ConsumerWidget {
+class FalconIntelApp extends ConsumerStatefulWidget {
   const FalconIntelApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<FalconIntelApp> createState() => _FalconIntelAppState();
+}
+
+class _FalconIntelAppState extends ConsumerState<FalconIntelApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangePlatformBrightness() {
+    ref.read(platformBrightnessProvider.notifier).state =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Palette must be switched before the router (and its screens) rebuild.
+    AppTheme.use(ref.watch(effectiveBrightnessProvider));
     final router = ref.watch(goRouterProvider);
     return MaterialApp.router(
       title: 'Falcon Intel',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.darkTheme,
+      theme: AppTheme.theme,
+      themeAnimationDuration: Duration.zero,
       routerConfig: router,
+      builder: (context, child) => AnnotatedRegion(value: AppTheme.overlayStyle, child: child!),
     );
   }
 }
 
-class MainShell extends ConsumerWidget {
-  final Widget child;
-  const MainShell({super.key, required this.child});
-
-  static const _destinations = [
-    (icon: Icons.newspaper, label: 'News', route: '/'),
-    (icon: Icons.chat_bubble_outline, label: 'Social', route: '/social'),
-    (icon: Icons.notifications_active, label: 'Alerts', route: '/alerts'),
-    (icon: Icons.visibility_outlined, label: 'Watchlist', route: '/watchlist'),
-    (icon: Icons.settings_outlined, label: 'Settings', route: '/settings'),
-  ];
+class MainShell extends ConsumerStatefulWidget {
+  final StatefulNavigationShell navigationShell;
+  const MainShell({super.key, required this.navigationShell});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final location = GoRouterState.of(context).matchedLocation;
-    final selectedIndex = _destinations.indexWhere((d) =>
-        location.startsWith(d.route) && (d.route != '/' || location == '/'));
+  ConsumerState<MainShell> createState() => _MainShellState();
+}
 
-    final alertCount = ref.watch(navAlertCountProvider);
+class _MainShellState extends ConsumerState<MainShell> {
+  StatefulNavigationShell get navigationShell => widget.navigationShell;
+
+  @override
+  void initState() {
+    super.initState();
+    // Right after a password sign-in the login screen leaves a fingerprint
+    // offer for us; show it once the main screen is up.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) presentBiometricOffer(context, ref);
+    });
+  }
+
+  static const _destinations = [
+    (icon: Icons.newspaper_outlined, selectedIcon: Icons.newspaper_rounded, label: 'News'),
+    (icon: Icons.forum_outlined, selectedIcon: Icons.forum_rounded, label: 'Social'),
+    (icon: Icons.notifications_none_rounded, selectedIcon: Icons.notifications_rounded, label: 'Alerts'),
+    (icon: Icons.visibility_outlined, selectedIcon: Icons.visibility_rounded, label: 'Watchlist'),
+    (icon: Icons.settings_outlined, selectedIcon: Icons.settings_rounded, label: 'Settings'),
+  ];
+
+  static const _alertsIndex = 2;
+
+  void _onSelect(int index) {
+    if (index == navigationShell.currentIndex) {
+      // Tapping the active tab again returns to the top-level list.
+      _branchKeys[index].currentState?.popUntil((route) => route.isFirst);
+    }
+    navigationShell.goBranch(index);
+    // Keep the alerts badge fresh as the user moves around.
+    ref.invalidate(navAlertCountProvider);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final alertCount = ref.watch(navAlertCountProvider).valueOrNull ?? 0;
 
     return Scaffold(
-      body: child,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: selectedIndex < 0 ? 0 : selectedIndex,
-        onDestinationSelected: (i) => context.go(_destinations[i].route),
-        destinations: _destinations.asMap().entries.map((entry) {
-          final i = entry.key;
-          final d = entry.value;
-          final isAlerts = d.route == '/alerts';
-
-          // Show badge on Alerts tab
-          if (isAlerts && alertCount.hasValue && alertCount.value! > 0) {
-            return NavigationDestination(
-              icon: Badge(
-                label: Text('${alertCount.value! > 99 ? '99+' : alertCount.value}',
-                    style: const TextStyle(fontSize: 10, color: Colors.white)),
-                backgroundColor: AppTheme.accentRed,
-                textColor: Colors.white,
-                child: Icon(d.icon),
+      body: navigationShell,
+      bottomNavigationBar: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: AppTheme.border)),
+        ),
+        child: NavigationBar(
+          selectedIndex: navigationShell.currentIndex,
+          onDestinationSelected: _onSelect,
+          destinations: [
+            for (var i = 0; i < _destinations.length; i++)
+              NavigationDestination(
+                icon: _withBadge(Icon(_destinations[i].icon), i == _alertsIndex ? alertCount : 0),
+                selectedIcon: _withBadge(Icon(_destinations[i].selectedIcon), i == _alertsIndex ? alertCount : 0),
+                label: _destinations[i].label,
+                tooltip: i == _alertsIndex && alertCount > 0
+                    ? '${_destinations[i].label} ($alertCount unchecked)'
+                    : _destinations[i].label,
               ),
-              selectedIcon: Badge(
-                label: Text('${alertCount.value! > 99 ? '99+' : alertCount.value}',
-                    style: const TextStyle(fontSize: 10, color: Colors.white)),
-                backgroundColor: AppTheme.accentRed,
-                textColor: Colors.white,
-                child: Icon(d.icon, color: AppTheme.primaryColor),
-              ),
-              label: d.label,
-            );
-          }
-
-          return NavigationDestination(
-            icon: Icon(d.icon),
-            selectedIcon: Icon(d.icon, color: AppTheme.primaryColor),
-            label: d.label,
-          );
-        }).toList(),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _withBadge(Widget icon, int count) {
+    if (count <= 0) return icon;
+    return Badge(
+      label: Text(count > 99 ? '99+' : '$count',
+          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white)),
+      backgroundColor: AppTheme.dangerFill,
+      child: icon,
     );
   }
 }

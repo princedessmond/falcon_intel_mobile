@@ -35,10 +35,12 @@ dependencies:
   # Utilities
   url_launcher: ^6.2.0
   local_auth: ^3.0.2
+  flutter_secure_storage: ^11.2.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  local_auth_platform_interface: ^1.1.0 # fake fingerprint sensor in tests
   flutter_lints: ^3.0.0
 
 flutter:
